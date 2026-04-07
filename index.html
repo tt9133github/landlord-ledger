@@ -102,7 +102,7 @@
                         <p>👤 租客: <strong class="text-gray-900">{{ room.tenant }}</strong></p>
                         <p>💰 租金: ¥{{ room.rent }}/月</p>
                         <p>📅 入住: <strong class="text-gray-900">{{ room.startDate }}</strong></p>
-                        <p class="text-blue-600 bg-blue-50 inline-block px-2 rounded mt-1">⏰ 下次收租: {{ getNextPayDate(room.startDate) }}</p>
+                        <p class="text-blue-600 bg-blue-50 inline-block px-2 rounded mt-1">⏰ 下次收租: {{ getNextPayDate(room) }}</p>
                         
                         <div class="flex space-x-2 mt-4 pt-3 border-t">
                             <button @click="editRoom(index)" class="flex-1 bg-gray-50 hover:bg-gray-200 text-gray-600 py-1.5 rounded text-xs">编辑</button>
@@ -338,7 +338,12 @@
             </h3>
             <div class="space-y-4 text-gray-700">
                 <p>租客: **{{ rentForm.tenantName }}**</p>
-                <p>金额: **¥{{ rentForm.amount }}** (3个月)</p>
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 mb-1">收租月数</label>
+                    <input v-model.number="rentForm.months" @input="syncRentFormAmount" type="number" min="1" step="1" class="w-full border-2 border-gray-200 p-2 rounded focus:border-green-500 outline-none">
+                    <div class="text-xs text-gray-400 mt-1">按整月登记，金额会按月租自动计算。</div>
+                </div>
+                <p>金额: **¥{{ rentForm.amount }}** ({{ rentForm.months || getDefaultRentMonths() }}个月)</p>
                 
                 <div>
                     <label class="block text-xs font-bold text-gray-500 mb-1">收租日期</label>
@@ -383,7 +388,7 @@
                 <h4 class="font-bold text-sm text-gray-800">1. 租金/押金提醒</h4>
                 <div class="text-sm border-b pb-2">
                     <p>租客: **{{ checkoutRoom.tenant }}**</p>
-                    <p>上次收租到期日: **{{ getNextPayDate(checkoutRoom.startDate) }}** (请根据实际退租日计算应退租金及押金)</p>
+                    <p>上次收租到期日: **{{ getNextPayDate(checkoutRoom) }}** (请根据实际退租日计算应退租金及押金)</p>
                 </div>
 
                 <h4 class="font-bold text-sm text-gray-800 flex justify-between items-center">
@@ -432,6 +437,7 @@
                 index: null,
                 roomName: '',
                 tenantName: '',
+                months: 3,
                 amount: 0,
                 date: new Date().toISOString().slice(0, 10)
             },
@@ -477,6 +483,7 @@
             'newExpense.date': function(newVal) { if (!newVal) this.newExpense.date = new Date().toISOString().slice(0, 10); }
         },
         mounted() { 
+            this.normalizeStoredData();
             this.updateSharedBy();
             // 确保日期默认值
             this.newBill.billingStartDate = this.getPreviousMonthDate();
@@ -523,6 +530,13 @@
                 const d = new Date();
                 d.setMonth(d.getMonth() - 1);
                 return d.toISOString().slice(0, 10);
+            },
+            getDefaultRentMonths() {
+                return 3;
+            },
+            toPositiveInteger(value, fallback = 1) {
+                const parsed = parseInt(value, 10);
+                return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
             },
             
             // --- 加权分摊核心逻辑 ---
@@ -675,13 +689,78 @@
                 if (!record || !record.date) return '-';
                 return this.formatDate(this.addMonths(new Date(record.date), 3));
             },
-            getNextPayDate(startDate) {
-                if (!startDate) return '-';
-                let start = new Date(startDate);
-                let now = new Date();
-                let nextPay = new Date(start);
-                while (nextPay <= now) nextPay.setMonth(nextPay.getMonth() + 3);
-                return nextPay.toISOString().slice(0, 10);
+            isRentRecord(record, roomName = '') {
+                if (!record || Number(record.amount || 0) <= 0) return false;
+                const title = String(record.title || '');
+                const isRentTitle = title.includes('房租收入');
+                const matchesRoom = !roomName || title.includes(roomName);
+                return matchesRoom && (record.recordKind === 'rent' || isRentTitle);
+            },
+            getRentMonths(record) {
+                if (!record) return this.getDefaultRentMonths();
+                if (record.rentMonths) {
+                    return this.toPositiveInteger(record.rentMonths, this.getDefaultRentMonths());
+                }
+                const desc = String(record.desc || '');
+                const matched = desc.match(/(\d+)\s*个?月/);
+                return matched ? this.toPositiveInteger(matched[1], this.getDefaultRentMonths()) : this.getDefaultRentMonths();
+            },
+            getRentCoverageStart(record) {
+                return record && record.coverageStart ? record.coverageStart : (record ? record.date : '');
+            },
+            getRentCoverageEnd(record) {
+                if (!record) return null;
+                const savedCoverageEnd = record.coverageEnd ? new Date(record.coverageEnd) : null;
+                if (savedCoverageEnd && !Number.isNaN(savedCoverageEnd.getTime())) {
+                    return savedCoverageEnd;
+                }
+                const coverageStart = this.getRentCoverageStart(record);
+                if (!coverageStart) return null;
+                return this.addMonths(new Date(coverageStart), this.getRentMonths(record));
+            },
+            normalizeRentRecord(record) {
+                if (!this.isRentRecord(record)) return record;
+                const coverageStart = record.coverageStart || record.date;
+                const rentMonths = this.getRentMonths(record);
+                const coverageEnd = this.formatDate(this.addMonths(new Date(coverageStart), rentMonths));
+
+                return {
+                    ...record,
+                    recordKind: 'rent',
+                    rentMonths,
+                    coverageStart,
+                    coverageEnd
+                };
+            },
+            normalizeStoredData() {
+                this.records = this.records.map(record => this.normalizeRentRecord(record));
+            },
+            getRoomRentRecords(room) {
+                return this.records
+                    .filter(record => this.isRentRecord(record, room.name))
+                    .map(record => this.normalizeRentRecord(record))
+                    .sort((left, right) => {
+                        const rightEnd = this.getRentCoverageEnd(right);
+                        const leftEnd = this.getRentCoverageEnd(left);
+                        return (rightEnd ? rightEnd.getTime() : 0) - (leftEnd ? leftEnd.getTime() : 0);
+                    });
+            },
+            getRentStatus(room) {
+                if (!room || !room.tenant || !room.startDate) {
+                    return { nextDueDate: '-' };
+                }
+
+                const latestRentRecord = this.getRoomRentRecords(room)[0] || null;
+                const dueDate = latestRentRecord
+                    ? this.getRentCoverageEnd(latestRentRecord)
+                    : this.addMonths(new Date(room.startDate), this.getDefaultRentMonths());
+
+                return {
+                    nextDueDate: this.formatDate(dueDate)
+                };
+            },
+            getNextPayDate(room) {
+                return this.getRentStatus(room).nextDueDate || '-';
             },
             
             // --- 房间和入住管理 ---
@@ -707,26 +786,45 @@
                     index: index,
                     roomName: r.name,
                     tenantName: r.tenant,
-                    amount: r.rent * 3,
+                    months: this.getDefaultRentMonths(),
+                    amount: r.rent * this.getDefaultRentMonths(),
                     date: new Date().toISOString().slice(0, 10)
                 };
                 this.showRentModal = true;
             },
+            syncRentFormAmount() {
+                const room = this.rooms[this.rentForm.index];
+                if (!room) return;
+                const months = this.toPositiveInteger(this.rentForm.months, this.getDefaultRentMonths());
+                this.rentForm.months = months;
+                this.rentForm.amount = room.rent * months;
+            },
             confirmCollectRent() {
-                const { roomName, tenantName, amount, date } = this.rentForm;
+                const { index, roomName, tenantName, date } = this.rentForm;
+                const months = this.toPositiveInteger(this.rentForm.months, this.getDefaultRentMonths());
+                const room = this.rooms[index];
+                const amount = room ? room.rent * months : this.rentForm.amount;
                 
                 if (!date) return alert('请选择收租日期。');
+                if (months < 1) return alert('收租月数至少为 1 个月。');
+
+                const coverageStart = date;
+                const coverageEnd = this.formatDate(this.addMonths(new Date(coverageStart), months));
 
                 this.records.unshift({ 
                     date: date, 
                     type: '收入', 
+                    recordKind: 'rent',
                     title: `${roomName} 房租收入`, 
-                    desc: `${tenantName} (3个月)`, 
+                    desc: `${tenantName} (${months}个月)`, 
+                    rentMonths: months,
+                    coverageStart,
+                    coverageEnd,
                     amount: amount 
                 });
                 
                 this.showRentModal = false;
-                alert(`收租记录已添加: ${roomName} ¥${amount}，日期 ${date}`);
+                alert(`收租记录已添加: ${roomName} ¥${amount}，日期 ${date}，${months}个月`);
             },
 
             // --- 账单和支出管理 ---
@@ -879,6 +977,7 @@
                             this.rooms = d.rooms || this.rooms; 
                             this.records = d.records || [];
                             this.bills = d.bills || [];
+                            this.normalizeStoredData();
                             alert("数据恢复成功！");
                         } 
                     } catch(err){ alert("文件解析失败"); } 

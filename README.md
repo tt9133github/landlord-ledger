@@ -5,7 +5,7 @@
 
 ### 功能
 - 房间与租客信息管理（租金、入住日期）
-- 收租登记（默认 3 个月周期）
+- 收租登记（默认 3 个月，可按整月调整）
 - 水/气/物业费按入住天数加权分摊
 - 维修等房东支出记录
 - JSON 数据导出/导入
@@ -27,7 +27,7 @@ A single-file landlord tool for rent income/expense tracking and weighted utilit
 
 ### Features
 - Room and tenant management (rent, start date)
-- Rent collection records (default 3-month cycle)
+- Rent collection records (default 3 months, editable by whole months)
 - Weighted split for water/gas/property fees by occupancy days
 - Landlord maintenance expense tracking
 - JSON export/import
