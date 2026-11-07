@@ -41,3 +41,10 @@ A single-file landlord tool for rent income/expense tracking and weighted utilit
 ### Notes
 - Front-end only, no server, no upload.
 - Keep personal data files out of version control before publishing.
+
+### 多房屋版本
+- 顶部切换原有合租房与新增整租房，分别管理租客、收入、费用和流水，可修改房屋名称。
+- 首次打开自动从 `house_v5_*` 读取旧数据到原有房屋，旧键保持不变，新数据写入 `landlord_v6`。
+- 新版 JSON 备份包含全部房屋；旧版 JSON 只恢复原有房屋，保留新增整租房。恢复前自动保存一份本机快照至 `landlord_before_restore`。
+- 迁移需在原网站同一浏览器、同一域名下进行；本地预览需先从原网站导出备份再导入。
+- 测试：`node tests/migration.cjs`。

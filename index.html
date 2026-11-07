@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>房东助手 v5.0 - 加权分摊修正版</title>
+    <title>房东助手 - 合租与整租管理</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='roof' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%232563eb'/%3E%3Cstop offset='1%25' stop-color='%231d4ed8'/%3E%3C/linearGradient%3E%3ClinearGradient id='body' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%23f8fafc'/%3E%3Cstop offset='1%25' stop-color='%23dbeafe'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%23eff6ff'/%3E%3Cpath d='M10 30 32 12l22 18' fill='none' stroke='url(%23roof)' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M16 28h32v22H16z' fill='url(%23body)' stroke='%232563eb' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M27 50V37h10v13' fill='%2393c5fd' stroke='%231d4ed8' stroke-width='3' stroke-linejoin='round'/%3E%3Ccircle cx='47' cy='18' r='11' fill='%23fbbf24' stroke='%23b45309' stroke-width='3'/%3E%3Cpath d='M43 18h8M47 14v8' stroke='%23b45309' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -20,7 +20,7 @@
     
     <div class="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow-sm border-l-4 border-blue-500">
         <h1 class="text-xl font-bold text-gray-800">
-            <i class="fas fa-home text-blue-600 mr-2"></i> 房东助手 (4室)
+            <i class="fas fa-home text-blue-600 mr-2"></i> 房东助手 · {{ activeProperty.name }}
         </h1>
         <div class="space-x-2 text-sm">
             <button @click="downloadData" class="text-blue-600 hover:bg-blue-50 px-3 py-1 rounded transition-all">
@@ -33,6 +33,11 @@
         </div>
     </div>
 
+    <div class="bg-white p-4 rounded-lg shadow-sm mb-4 flex flex-wrap gap-3 items-center">
+        <button v-for="property in properties" :key="property.id" @click="switchProperty(property.id)" :class="property.id === activePropertyId ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'" class="px-4 py-2 rounded-lg">{{ property.name }} · {{ property.mode === 'whole' ? '整租' : '分房出租' }}</button>
+        <button @click="renameProperty" class="text-blue-600 text-sm">修改房屋名称</button>
+        <p class="w-full text-sm text-gray-500">当前房屋的租客、账单和收支独立记录；备份包含全部房屋。整租费用直接归整套房屋。</p>
+    </div>
     <div class="grid grid-cols-3 gap-4 mb-8">
         <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-green-500">
             <div class="text-gray-500 text-sm font-semibold mb-1">总房租收入</div>
@@ -182,10 +187,10 @@
                 <h2 class="text-lg font-bold text-gray-700 mb-2 flex items-center">
                     <i class="fas fa-wallet mr-2 text-red-500"></i> 房东支出
                 </h2>
-                <p class="text-xs text-gray-400 mb-4">计入成本。上次缴费：{{ getLastLandladyPaymentDate() }}<br><br>
+                <p v-if="activeProperty.mode === 'shared'" class="text-xs text-gray-400 mb-4">计入成本。上次缴费：{{ getLastLandladyPaymentDate() }}<br><br>
 下次应供时间：{{ getNextLandladyPaymentDate() }}
                 </p>
-                <div class="mb-4 rounded-lg border border-orange-200 bg-orange-50 p-3">
+                <div v-if="activeProperty.mode === 'shared'" class="mb-4 rounded-lg border border-orange-200 bg-orange-50 p-3">
                     <button @click="openLandladyPaymentModal" class="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 rounded shadow font-medium transition-transform active:scale-95">
                         上供录入
                     </button>
@@ -424,6 +429,9 @@
     new Vue({
         el: '#app',
         data: {
+            properties: [{ id: 'legacy', name: '原有房屋', mode: 'shared', rooms: [], records: [], bills: [] }, { id: 'whole', name: '新增整租房屋', mode: 'whole', rooms: [{ name: '整套', tenant: '', rent: 0, startDate: '' }], records: [], bills: [] }],
+            activePropertyId: 'legacy',
+            storageReady: false,
             showModal: false,
             showRentModal: false,
             showLandladyPaymentModal: false,
@@ -471,18 +479,19 @@
             // 修复：确保房间信息持久化，键名统一
             rooms: { 
                 handler() { 
-                    localStorage.setItem('house_v5_rooms', JSON.stringify(this.rooms)); 
+                    this.persistProperties();
                     this.updateSharedBy(); 
                 }, 
                 deep: true 
             },
-            records: { handler() { localStorage.setItem('house_v5_records', JSON.stringify(this.records)); }, deep: true },
-            bills: { handler() { localStorage.setItem('house_v5_bills', JSON.stringify(this.bills)); }, deep: true },
+            records: { handler() { this.persistProperties(); }, deep: true },
+            bills: { handler() { this.persistProperties(); }, deep: true },
             'newBill.date': function(newVal) { if (!newVal) this.newBill.date = new Date().toISOString().slice(0, 10); },
             'newLandladyPayment.date': function(newVal) { if (!newVal) this.newLandladyPayment.date = new Date().toISOString().slice(0, 10); },
             'newExpense.date': function(newVal) { if (!newVal) this.newExpense.date = new Date().toISOString().slice(0, 10); }
         },
         mounted() { 
+            this.loadProperties();
             this.normalizeStoredData();
             this.updateSharedBy();
             // 确保日期默认值
@@ -490,6 +499,7 @@
             this.newBill.billingEndDate = new Date().toISOString().slice(0, 10);
         },
         computed: {
+            activeProperty() { return this.properties.find(p => p.id === this.activePropertyId) || this.properties[0]; },
             totalIncome() { return this.records.filter(r => r.amount > 0).reduce((sum, r) => sum + r.amount, 0); },
             totalExpense() { return Math.abs(this.records.filter(r => r.amount < 0).reduce((sum, r) => sum + r.amount, 0)); },
             
@@ -519,6 +529,53 @@
             }
         },
         methods: {
+            loadProperties() {
+                const saved = localStorage.getItem('landlord_v6');
+                if (saved) {
+                    try {
+                        const data = JSON.parse(saved);
+                        this.validateProperties(data.properties);
+                        this.properties = data.properties;
+                        this.activePropertyId = data.activePropertyId && data.properties.some(p => p.id === data.activePropertyId) ? data.activePropertyId : data.properties[0].id;
+                    } catch (error) { alert('新版数据读取失败，保留原存储并停止载入。请先备份浏览器数据。'); throw error; }
+                } else {
+                    this.properties[0].rooms = this.rooms;
+                    this.properties[0].records = this.records;
+                    this.properties[0].bills = this.bills;
+                }
+                this.rooms = this.activeProperty.rooms;
+                this.records = this.activeProperty.records;
+                this.bills = this.activeProperty.bills;
+                this.storageReady = true;
+                this.persistProperties();
+            },
+            validateProperties(properties) {
+                if (!Array.isArray(properties) || !properties.length || new Set(properties.map(p => p.id)).size !== properties.length || properties.some(p => !p.id || !p.name || !['whole', 'shared'].includes(p.mode) || !Array.isArray(p.rooms) || !Array.isArray(p.records) || !Array.isArray(p.bills) || p.rooms.some(r => !r.name || !Number.isFinite(Number(r.rent))) || p.bills.some(b => !Array.isArray(b.sharedBy)))) throw new Error('无效的房屋备份');
+            },
+            persistProperties() {
+                if (!this.storageReady) return;
+                Object.assign(this.activeProperty, { rooms: this.rooms, records: this.records, bills: this.bills });
+                localStorage.setItem('landlord_v6', JSON.stringify({ version: 6, activePropertyId: this.activePropertyId, properties: this.properties }));
+            },
+            switchProperty(id) {
+                this.persistProperties();
+                this.activePropertyId = id;
+                this.rooms = this.activeProperty.rooms;
+                this.records = this.activeProperty.records;
+                this.bills = this.activeProperty.bills;
+                this.checkoutIndex = null;
+                this.showLandladyPaymentModal = false;
+                this.showRentModal = false;
+                this.showCheckoutModal = false;
+                this.showModal = false;
+                this.newExpense.roomName = '';
+                this.updateSharedBy();
+                this.persistProperties();
+            },
+            renameProperty() {
+                const name = prompt('房屋名称', this.activeProperty.name);
+                if (name && name.trim()) { this.activeProperty.name = name.trim(); this.persistProperties(); }
+            },
             // --- 实用工具 ---
             getDaysBetween(date1, date2) {
                 const oneDay = 24 * 60 * 60 * 1000;
@@ -964,32 +1021,49 @@
             
             // --- 数据管理 ---
             downloadData() {
-                const data = { rooms: this.rooms, records: this.records, bills: this.bills };
+                this.persistProperties();
+                const data = { version: 6, properties: this.properties };
                 const blob = new Blob([JSON.stringify(data)], {type: "application/json"});
-                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `房东数据_v5_${new Date().toISOString().slice(0,10)}.json`; a.click();
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `房东数据_v6_${new Date().toISOString().slice(0,10)}.json`; a.click();
             },
             uploadData(e) {
                 const r = new FileReader(); 
                 r.onload = (e) => { 
                     try { 
                         const d = JSON.parse(e.target.result); 
-                        if(confirm('确定覆盖当前所有数据吗？')) { 
-                            this.rooms = d.rooms || this.rooms; 
-                            this.records = d.records || [];
-                            this.bills = d.bills || [];
+                        let properties;
+                        if (d.version === 6) properties = d.properties;
+                        else {
+                            if (!Array.isArray(d.rooms) || !Array.isArray(d.records) || !Array.isArray(d.bills)) throw new Error('备份格式错误');
+                            properties = JSON.parse(JSON.stringify(this.properties));
+                            const legacy = properties.find(p => p.id === 'legacy');
+                            if (!legacy) throw new Error('缺少原有房屋');
+                            Object.assign(legacy, { rooms: d.rooms, records: d.records, bills: d.bills });
+                        }
+                        this.validateProperties(properties);
+                        if(confirm(d.version === 6 ? '确定恢复全部房屋数据吗？' : '确定恢复旧版数据到原有房屋吗？整租房屋数据将保留。')) {
+                            this.persistProperties();
+                            localStorage.setItem('landlord_before_restore', localStorage.getItem('landlord_v6'));
+                            this.properties = properties;
+                            this.activePropertyId = properties[0].id;
+                            this.rooms = this.activeProperty.rooms;
+                            this.records = this.activeProperty.records;
+                            this.bills = this.activeProperty.bills;
+                            this.persistProperties();
                             this.normalizeStoredData();
                             alert("数据恢复成功！");
                         } 
                     } catch(err){ alert("文件解析失败"); } 
                 }; 
+                if (!e.target.files[0]) return;
                 r.readAsText(e.target.files[0]); 
                 e.target.value = '';
             },
             
             resetData() { 
-                if(confirm('警告：确定清空所有收支流水和水电/物业账单历史吗？（房间信息和租客信息将保留）')) {
-                    localStorage.removeItem('house_v5_records'); 
-                    localStorage.removeItem('house_v5_bills'); 
+                if(confirm('警告：确定清空当前房屋的收支流水和水电/物业账单历史吗？（房间信息和租客信息将保留）')) {
+                    this.persistProperties();
+
                     
                     this.records = [];
                     this.bills = [];
